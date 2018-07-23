@@ -22,6 +22,7 @@ import android.arch.lifecycle.ViewModelProviders
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.support.annotation.StringRes
 import android.support.design.widget.Snackbar
 import android.support.design.widget.TextInputLayout
 import android.support.v4.content.ContextCompat
@@ -40,12 +41,10 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions.withCrossFade
-import io.plaidapp.core.data.Result
 import io.plaidapp.core.ui.transitions.FabTransform
 import io.plaidapp.core.ui.transitions.MorphTransform
 import io.plaidapp.core.util.ScrimUtil
 import io.plaidapp.core.util.doAfterTextChanged
-import io.plaidapp.core.util.exhaustive
 import io.plaidapp.core.util.glide.GlideApp
 import io.plaidapp.designernews.R
 import io.plaidapp.designernews.provideViewModelFactory
@@ -66,9 +65,6 @@ class LoginActivity : AppCompatActivity() {
 
     private lateinit var viewModel: LoginViewModel
 
-    internal val isLoginValid: Boolean
-        get() = username?.length() != 0 && password?.length() != 0
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_designer_news_login)
@@ -76,19 +72,21 @@ class LoginActivity : AppCompatActivity() {
         val factory = provideViewModelFactory(this)
         viewModel = ViewModelProviders.of(this, factory).get(LoginViewModel::class.java)
 
-        viewModel.uiState.observe(this, Observer<Result<LoginUiModel>?> { loginUiModelResult ->
-            when (loginUiModelResult) {
-                is Result.Loading -> showLoading()
-                is Result.Error -> showLoginFailed()
-                is Result.Success<*> -> {
-                    updateUiWithUser((loginUiModelResult as Result.Success<LoginUiModel>).data)
-                    setResult(Activity.RESULT_OK)
-                    finish()
-                }
-                null -> {
-                    throw NullPointerException("LoginUiModel should not be null")
-                }
-            }.exhaustive
+        viewModel.uiState.observe(this, Observer<LoginUiModel?> { uiModel ->
+            if (uiModel?.showProgress == true) {
+                showLoading()
+            }
+
+            if (uiModel?.showError != null && !uiModel.showError.consumed) {
+                showLoginFailed(uiModel.showError.peek())
+            }
+            login?.isEnabled = uiModel?.enableLoginButton ?: false
+            if (uiModel?.showSuccess != null && !uiModel.showSuccess.consumed) {
+                val userData = uiModel.showSuccess.peek()
+                updateUiWithUser(userData.displayName, userData.portraitUrl)
+                setResult(Activity.RESULT_OK)
+                finish()
+            }
         })
 
         bindViews()
@@ -103,23 +101,20 @@ class LoginActivity : AppCompatActivity() {
 
         loading?.visibility = View.GONE
         username?.doAfterTextChanged {
-            enableLoginButtonIfLoginIsValid()
+            viewModel.loginDataChanged(it.toString(), password?.text.toString())
         }
+
         password?.apply {
             doAfterTextChanged {
-                enableLoginButtonIfLoginIsValid()
+                viewModel.loginDataChanged(username?.text.toString(), it.toString())
             }
             setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_DONE && isLoginValid) {
-                    login?.performClick()
+                if (actionId == EditorInfo.IME_ACTION_DONE) {
+                    viewModel.login(username!!.text.toString(), password!!.text.toString())
                 }
                 false
             }
         }
-    }
-
-    private fun enableLoginButtonIfLoginIsValid() {
-        login?.isEnabled = isLoginValid
     }
 
     private fun bindViews() {
@@ -157,14 +152,14 @@ class LoginActivity : AppCompatActivity() {
         finishAfterTransition()
     }
 
-    private fun updateUiWithUser(uiModel: LoginUiModel) {
+    private fun updateUiWithUser(name: String, portraitUrl: String?) {
         val v = LayoutInflater.from(this@LoginActivity)
             .inflate(appR.layout.toast_logged_in_confirmation, null, false)
-        (v.findViewById<View>(appR.id.name) as TextView).text = uiModel.displayName
+        (v.findViewById<View>(appR.id.name) as TextView).text = name
         // need to use app context here as the activity will be destroyed shortly
-        if (uiModel.portraitUrl != null) {
+        if (portraitUrl != null) {
             GlideApp.with(applicationContext)
-                .load(uiModel.portraitUrl)
+                .load(portraitUrl)
                 .placeholder(appR.drawable.avatar_placeholder)
                 .circleCrop()
                 .transition(withCrossFade())
@@ -182,9 +177,9 @@ class LoginActivity : AppCompatActivity() {
         }.show()
     }
 
-    private fun showLoginFailed() {
+    private fun showLoginFailed(@StringRes errorString: Int) {
         container?.let {
-            Snackbar.make(it, appR.string.login_failed, Snackbar.LENGTH_SHORT).show()
+            Snackbar.make(it, errorString, Snackbar.LENGTH_SHORT).show()
         }
         showLogin()
         password?.requestFocus()
